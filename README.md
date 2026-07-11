@@ -1,9 +1,10 @@
-# IP-Symcon Modul: BMW CarData (Elektrofahrzeuge)
+# IP-Symcon Modul: BMW CarData (Elektrofahrzeug) – MQTT-Streaming
 
-Ein IP-Symcon Modul zum Abruf der Fahrzeugdaten eines **elektrischen BMW** über die
-offizielle [BMW CarData API](https://bmw-cardata.bmwgroup.com/customer/public/api-specification).
+Ein IP-Symcon Modul zum Abruf der Fahrzeugdaten eines **elektrischen BMW** über den
+**BMW CarData Stream** (MQTT, Echtzeit-Push). Gegenüber der REST-API hat das Streaming
+zwei Vorteile: **Echtzeit-Aktualisierung** und **kein 50-Abrufe-pro-Tag-Limit**.
 
-Es werden gezielt die für ein E-Fahrzeug relevanten Werte ausgelesen:
+Ausgelesene E-Fahrzeug-Werte (Telematik-Schlüssel):
 
 | Variable | Telematik-Schlüssel |
 |---|---|
@@ -19,76 +20,62 @@ Es werden gezielt die für ein E-Fahrzeug relevanten Werte ausgelesen:
 
 ---
 
-## Wichtige Rahmenbedingungen der BMW CarData API
+## Architektur
 
-- **Rate-Limit:** max. **50 API-Abrufe pro 24 Stunden**. Deshalb ist das Standardintervall
-  auf 60 Minuten gesetzt (≈ 24 Abrufe/Tag). Mindestens 30 Minuten wählen.
-- **Authentifizierung:** OAuth 2.0 **Device Code Flow** mit PKCE. Der Access-Token ist
-  1 Stunde gültig, der Refresh-Token 2 Wochen. Das Modul erneuert den Access-Token
-  automatisch. Nach 2 Wochen Inaktivität ist eine erneute Anmeldung nötig.
-- **Container:** Die API liefert nur Werte für Telematik-Schlüssel, die vorher in einem
-  „Container" registriert wurden. Das Modul legt diesen Container per Knopfdruck an.
+Das Modul ist ein **Kind eines IP-Symcon „MQTT Client"** (I/O):
+
+- Der **MQTT Client** hält die persistente TLS-Verbindung zu BMW
+  (`customer.streaming-cardata.bmwgroup.com:9000`).
+- Dieses **Modul** verwaltet die OAuth-Tokens (Device Code Flow + Refresh) und schiebt
+  das stündlich neue **`id_token` automatisch als Passwort** in den MQTT Client.
+- Eingehende MQTT-Nachrichten (`{"vin":…,"data":{…}}`) werden geparst und in Variablen
+  geschrieben.
 
 ---
-
-## Installation
-
-1. Ordner `BMWCarData` in das IP-Symcon Modul-Verzeichnis kopieren, **oder** als
-   privates Modul über die Modul-Verwaltung per Git-URL hinzufügen.
-2. In IP-Symcon eine neue Instanz **„BMWCarData"** anlegen.
 
 ## Einrichtung
 
-### 1. Client-ID erzeugen
-Im [BMW CarData Kundenportal](https://bmw-cardata.bmwgroup.com/) anmelden, unter dem
-API-/Streaming-Bereich einen **CarData Client** erstellen und diesem die Scopes
-`cardata:api:read` und `cardata:streaming:read` zuweisen. Die erzeugte **Client-ID** kopieren.
+### 1. BMW-Portal
+- CarData-Client anlegen, **Client-ID** notieren
+- Client für **„CarData Stream"** (`cardata:streaming:read`) abonnieren – **vor** dem Login
+- Unter „Configure data stream" die gewünschten Attribute (mind. Ladezustand etc.) auswählen
 
-### 2. Instanz konfigurieren
-- **Client-ID** eintragen
-- **VIN** (Fahrgestellnummer) des Fahrzeugs eintragen
-- Auf **„Übernehmen"** klicken
+### 2. IP-Symcon
+1. Neue Instanz **„BMWCarData"** anlegen. IP-Symcon fragt nach einem übergeordneten
+   **MQTT Client** – diesen anlegen lassen.
+2. In der Modul-Instanz **Client-ID** und **VIN** eintragen, **Übernehmen**.
+3. **„1. Login starten"** → URL + Code im Browser mit BMW-ID bestätigen.
+4. **„2. Login abschließen"** → Tokens werden gespeichert, der MQTT Client automatisch
+   mit Host/Port/TLS/Username/Passwort konfiguriert.
+5. **„Verbindungsdaten anzeigen"** klicken und das angezeigte **Topic-Abo**
+   (`GCID/VIN`) im **MQTT Client** unter *Subscriptions* eintragen.
 
-### 3. Anmelden
-- **„1. Login starten"** klicken → es erscheint eine URL und ein User-Code
-- URL im Browser öffnen, mit den **BMW-ID Zugangsdaten** anmelden, Code bestätigen
-- Zurück in IP-Symcon **„2. Login abschließen"** klicken
-
-### 4. Container einrichten
-- Einmalig **„Container einrichten"** klicken. Damit werden alle oben genannten
-  E-Fahrzeug-Werte registriert und ab jetzt automatisch abgerufen.
-
-Fertig – die Variablen werden im gewählten Intervall aktualisiert.
+Sobald das Fahrzeug neue Daten sendet (oder du in der My-BMW-App eine Aktion auslöst),
+erscheinen die Werte in den Variablen.
 
 ---
 
-## Öffentliche Funktionen (für Skripte/Ablaufpläne)
+## Öffentliche Funktionen
 
 ```php
-BMWCD_UpdateData(int $InstanzID);        // Daten sofort abrufen
-BMWCD_RefreshToken(int $InstanzID);      // Access-Token manuell erneuern
-BMWCD_RequestDeviceCode(int $InstanzID); // Login-Flow starten
-BMWCD_CompleteLogin(int $InstanzID);     // Login abschließen
-BMWCD_SetupContainer(int $InstanzID);    // Datencontainer (neu) anlegen
+BMWCD_RequestDeviceCode(int $InstanzID);  // Login-Flow starten
+BMWCD_CompleteLogin(int $InstanzID);      // Login abschließen + MQTT-Client konfigurieren
+BMWCD_RefreshToken(int $InstanzID);       // id_token erneuern + an MQTT-Client übergeben
+BMWCD_ConfigureMQTT(int $InstanzID);      // MQTT-Client neu konfigurieren
+BMWCD_ShowConnectionInfo(int $InstanzID); // Host/Port/Username/Topic anzeigen
 ```
 
 ---
 
-## Hinweise / mögliche Anpassungen
+## Status / Hinweise
 
-Die offizielle API-Spezifikation ist eine passwortgeschützte Swagger-Oberfläche und
-konnte nicht vollständig automatisiert ausgelesen werden. Folgende Details basieren auf
-der öffentlichen Dokumentation und Community-Implementierungen und sollten ggf. gegen die
-Live-Swagger geprüft werden, falls ein Aufruf fehlschlägt (siehe IP-Symcon Debug-Fenster
-der Instanz):
-
-- Feldname des Container-Bodys (`technicalDescriptors`)
-- Genaue Verschachtelung der `telematicData`-Antwort → der Parser im Modul ist bewusst
-  tolerant und sucht die Schlüssel rekursiv, egal ob als Objekt oder Liste.
-- Der Header `x-version: v1`
-
-Weitere Telematik-Schlüssel lassen sich einfach in der Methode `GetDataMap()` in
-`BMWCarData/module.php` ergänzen (danach „Container einrichten" erneut ausführen).
-
-Die vollständige Liste der Schlüssel steht im
-**BMW CarData Telematics Data Catalogue** (PDF, im Kundenportal verlinkt).
+- **Getestet:** Client-Anlage, Device-Code-Flow und PKCE (S256, gegen RFC-7636 verifiziert)
+  funktionieren. Die **Token-Ausstellung bei BMW** war zum Entwicklungszeitpunkt durch eine
+  **BMW-seitige Störung (HTTP 500 am Token-Endpoint)** blockiert, weshalb der Live-Datenfluss
+  per MQTT noch nicht end-to-end gegen echte Fahrzeugdaten getestet werden konnte.
+- Falls die automatische MQTT-Konfiguration in deiner Symcon-Version nicht greift
+  (abweichende Property-Namen), die Verbindungsdaten per **„Verbindungsdaten anzeigen"**
+  ablesen und im MQTT Client manuell eintragen. Das Passwort (`id_token`) wird dennoch
+  automatisch aktualisiert.
+- Weitere Telematik-Schlüssel lassen sich in `GetDataMap()` (in `BMWCarData/module.php`)
+  ergänzen; die vollständige Liste steht im **BMW Telematics Data Catalogue** im Portal.

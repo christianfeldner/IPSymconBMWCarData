@@ -9,7 +9,7 @@
         "BMW Elektrofahrzeug"
     ],
     "url": "https://github.com/christianfeldner/IPSymconBMWCarData",
-    "parentRequirements": [],
+    "parentRequirements": ["{7F7632D9-FA40-4F38-8AAA-83C630BAF737}"],
     "childRequirements": [],
     "implemented": [],
     "prefix": "BMWCD"

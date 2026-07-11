@@ -3,13 +3,19 @@
 declare(strict_types=1);
 
 /**
- * IP-Symcon Modul für BMW CarData (Elektrofahrzeuge)
+ * IP-Symcon Modul für BMW CarData (Elektrofahrzeug) - MQTT-Streaming-Variante
  *
  * Authentifizierung: OAuth 2.0 Device Code Flow mit PKCE (S256)
- * Daten:             REST-API von BMW CarData (api-cardata.bmwgroup.com)
+ * Daten:             BMW CarData Stream (MQTT, Echtzeit-Push, KEIN 50/Tag-Limit)
  *
- * Wichtig: Die BMW CarData REST-API erlaubt nur max. 50 Aufrufe pro 24 Stunden.
- * Das Aktualisierungsintervall ist deshalb standardmäßig konservativ (60 Minuten).
+ * Architektur:
+ *   Dieses Modul ist ein KIND eines IP-Symcon "MQTT Client" (I/O).
+ *   - Der MQTT Client hält die persistente TLS-Verbindung zu BMW.
+ *   - Dieses Modul verwaltet die Tokens (Device Flow + Refresh) und schiebt das
+ *     stündlich neue id_token automatisch als Passwort in den MQTT Client.
+ *   - Eingehende MQTT-Nachrichten werden in ReceiveData() geparst.
+ *
+ * MQTT-Interface-GUID des IP-Symcon MQTT Client: {7F7632D9-FA40-4F38-8AAA-83C630BAF737}
  */
 class BMWCarData extends IPSModule
 {
@@ -17,32 +23,33 @@ class BMWCarData extends IPSModule
     private const OAUTH_DEVICE_CODE = 'https://customer.bmwgroup.com/gcdm/oauth/device/code';
     private const OAUTH_TOKEN       = 'https://customer.bmwgroup.com/gcdm/oauth/token';
 
-    // REST-API Basis
-    private const API_BASE = 'https://api-cardata.bmwgroup.com';
+    // Streaming (MQTT) Zugangsdaten
+    private const STREAM_HOST = 'customer.streaming-cardata.bmwgroup.com';
+    private const STREAM_PORT = 9000;
 
-    // Angeforderte Scopes
-    private const SCOPE = 'authenticate_user openid cardata:streaming:read cardata:api:read';
+    // Für das Streaming benötigter Scope
+    private const SCOPE = 'authenticate_user openid cardata:streaming:read';
 
-    // Version-Header der BMW-API
-    private const API_VERSION = 'v1';
+    // Datenpaket-GUID zwischen MQTT Client und Kindmodulen
+    private const MQTT_TX = '{7F7632D9-FA40-4F38-8AAA-83C630BAF737}';
 
     /**
-     * Telematik-Schlüssel, die für ein Elektrofahrzeug relevant sind.
-     * Aufbau je Eintrag: Variablen-Ident => [Typ, Telematik-Key, Profil, Name]
+     * Telematik-Schlüssel für ein Elektrofahrzeug.
+     * Variablen-Ident => [Typ, Telematik-Key (Descriptor), Profil, Name]
      * Typen: 0 = Boolean, 1 = Integer, 2 = Float, 3 = String
      */
     private function GetDataMap(): array
     {
         return [
-            'SoC'                => [2, 'vehicle.powertrain.electric.battery.stateOfCharge.displayed', 'BMWCD.SoC',   'Ladezustand'],
-            'TargetSoC'          => [2, 'vehicle.powertrain.electric.battery.stateOfCharge.target',    'BMWCD.SoC',   'Ziel-Ladezustand'],
-            'Range'              => [2, 'vehicle.drivetrain.electricEngine.kombiRemainingElectricRange', 'BMWCD.Range', 'Elektrische Reichweite'],
-            'ChargingStatus'     => [3, 'vehicle.drivetrain.electricEngine.charging.status',           '',            'Ladestatus'],
-            'ChargingHVStatus'   => [3, 'vehicle.drivetrain.electricEngine.charging.hvStatus',         '',            'Hochvolt-Status'],
-            'ChargeTimeRemaining'=> [1, 'vehicle.drivetrain.electricEngine.charging.timeRemaining',    'BMWCD.Time',  'Restladezeit'],
-            'ChargingPort'       => [3, 'vehicle.body.chargingPort.status',                            '',            'Ladeanschluss'],
-            'Preconditioning'    => [3, 'vehicle.cabin.hvac.preconditioning.status.comfortState',      '',            'Vorklimatisierung'],
-            'Mileage'            => [2, 'vehicle.travelledDistance',                                    'BMWCD.Range', 'Kilometerstand'],
+            'SoC'                 => [2, 'vehicle.powertrain.electric.battery.stateOfCharge.displayed', 'BMWCD.SoC',   'Ladezustand'],
+            'TargetSoC'           => [2, 'vehicle.powertrain.electric.battery.stateOfCharge.target',    'BMWCD.SoC',   'Ziel-Ladezustand'],
+            'Range'               => [2, 'vehicle.drivetrain.electricEngine.kombiRemainingElectricRange', 'BMWCD.Range', 'Elektrische Reichweite'],
+            'ChargingStatus'      => [3, 'vehicle.drivetrain.electricEngine.charging.status',           '',            'Ladestatus'],
+            'ChargingHVStatus'    => [3, 'vehicle.drivetrain.electricEngine.charging.hvStatus',         '',            'Hochvolt-Status'],
+            'ChargeTimeRemaining' => [1, 'vehicle.drivetrain.electricEngine.charging.timeRemaining',    'BMWCD.Time',  'Restladezeit'],
+            'ChargingPort'        => [3, 'vehicle.body.chargingPort.status',                            '',            'Ladeanschluss'],
+            'Preconditioning'     => [3, 'vehicle.cabin.hvac.preconditioning.status.comfortState',      '',            'Vorklimatisierung'],
+            'Mileage'             => [2, 'vehicle.travelledDistance',                                    'BMWCD.Range', 'Kilometerstand'],
         ];
     }
 
@@ -50,23 +57,23 @@ class BMWCarData extends IPSModule
     {
         parent::Create();
 
-        // Konfigurations-Eigenschaften
+        // Als Kind eines MQTT Client anmelden (I/O-Verbindung anfordern)
+        $this->ConnectParent('{F7A0DD2E-7684-95C0-64C2-D2A9DC47577B}'); // MQTT Client Modul-GUID
+
         $this->RegisterPropertyString('ClientID', '');
         $this->RegisterPropertyString('VIN', '');
-        $this->RegisterPropertyString('ContainerID', '');
-        $this->RegisterPropertyInteger('UpdateInterval', 60); // Minuten
+        $this->RegisterPropertyInteger('RefreshInterval', 50); // Minuten (Token < 60 min gültig)
 
-        // Persistente Speicher (überleben Neustart, werden nicht im Formular gezeigt)
         $this->RegisterAttributeString('AccessToken', '');
         $this->RegisterAttributeString('RefreshToken', '');
+        $this->RegisterAttributeString('IDToken', '');
         $this->RegisterAttributeInteger('TokenExpiry', 0);
         $this->RegisterAttributeString('DeviceCode', '');
         $this->RegisterAttributeString('CodeVerifier', '');
-        $this->RegisterAttributeString('AutoContainerID', '');
         $this->RegisterAttributeString('GCID', '');
         $this->RegisterAttributeString('Scope', '');
 
-        $this->RegisterTimer('UpdateData', 0, 'BMWCD_UpdateData($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('RefreshToken', 0, 'BMWCD_RefreshToken($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges()
@@ -76,10 +83,18 @@ class BMWCarData extends IPSModule
         $this->SetupProfiles();
         $this->SetupVariables();
 
-        // Timer nur aktivieren, wenn wir angemeldet sind
+        // Nur MQTT-Nachrichten für unsere VIN durchlassen (Filter auf das gesamte Datenpaket)
+        $vin = trim($this->ReadPropertyString('VIN'));
+        if ($vin !== '') {
+            $this->SetReceiveDataFilter('.*' . preg_quote($vin) . '.*');
+        } else {
+            $this->SetReceiveDataFilter('.*\x00NOMATCH\x00.*');
+        }
+
+        // Token-Refresh-Timer
         $connected = $this->ReadAttributeString('RefreshToken') !== '';
-        $interval  = $this->ReadPropertyInteger('UpdateInterval');
-        $this->SetTimerInterval('UpdateData', $connected ? max(30, $interval) * 60 * 1000 : 0);
+        $interval  = $this->ReadPropertyInteger('RefreshInterval');
+        $this->SetTimerInterval('RefreshToken', $connected ? max(5, min(59, $interval)) * 60 * 1000 : 0);
 
         $this->UpdateStatus();
     }
@@ -91,23 +106,21 @@ class BMWCarData extends IPSModule
     private function SetupProfiles(): void
     {
         if (!IPS_VariableProfileExists('BMWCD.SoC')) {
-            IPS_CreateVariableProfile('BMWCD.SoC', 2); // Float
+            IPS_CreateVariableProfile('BMWCD.SoC', 2);
             IPS_SetVariableProfileValues('BMWCD.SoC', 0, 100, 1);
             IPS_SetVariableProfileText('BMWCD.SoC', '', ' %');
             IPS_SetVariableProfileIcon('BMWCD.SoC', 'Battery');
             IPS_SetVariableProfileDigits('BMWCD.SoC', 0);
         }
-
         if (!IPS_VariableProfileExists('BMWCD.Range')) {
-            IPS_CreateVariableProfile('BMWCD.Range', 2); // Float
+            IPS_CreateVariableProfile('BMWCD.Range', 2);
             IPS_SetVariableProfileValues('BMWCD.Range', 0, 0, 1);
             IPS_SetVariableProfileText('BMWCD.Range', '', ' km');
             IPS_SetVariableProfileIcon('BMWCD.Range', 'Distance');
             IPS_SetVariableProfileDigits('BMWCD.Range', 0);
         }
-
         if (!IPS_VariableProfileExists('BMWCD.Time')) {
-            IPS_CreateVariableProfile('BMWCD.Time', 1); // Integer
+            IPS_CreateVariableProfile('BMWCD.Time', 1);
             IPS_SetVariableProfileText('BMWCD.Time', '', ' min');
             IPS_SetVariableProfileIcon('BMWCD.Time', 'Clock');
         }
@@ -119,24 +132,93 @@ class BMWCarData extends IPSModule
         foreach ($this->GetDataMap() as $ident => $def) {
             [$type, , $profile, $name] = $def;
             switch ($type) {
-                case 0:
-                    $this->RegisterVariableBoolean($ident, $this->Translate($name), $profile, $pos);
-                    break;
-                case 1:
-                    $this->RegisterVariableInteger($ident, $this->Translate($name), $profile, $pos);
-                    break;
-                case 2:
-                    $this->RegisterVariableFloat($ident, $this->Translate($name), $profile, $pos);
-                    break;
-                default:
-                    $this->RegisterVariableString($ident, $this->Translate($name), $profile, $pos);
-                    break;
+                case 0: $this->RegisterVariableBoolean($ident, $this->Translate($name), $profile, $pos); break;
+                case 1: $this->RegisterVariableInteger($ident, $this->Translate($name), $profile, $pos); break;
+                case 2: $this->RegisterVariableFloat($ident, $this->Translate($name), $profile, $pos); break;
+                default: $this->RegisterVariableString($ident, $this->Translate($name), $profile, $pos); break;
             }
             $pos++;
         }
-
-        // Zeitstempel der letzten erfolgreichen Aktualisierung
         $this->RegisterVariableInteger('LastUpdate', $this->Translate('Letzte Aktualisierung'), '~UnixTimestamp', $pos);
+    }
+
+    // =====================================================================
+    //  MQTT-Empfang
+    // =====================================================================
+
+    /**
+     * Wird vom übergeordneten MQTT Client bei eingehenden Nachrichten aufgerufen.
+     */
+    public function ReceiveData($JSONString)
+    {
+        $data = json_decode((string) $JSONString);
+        if (!is_object($data) || !isset($data->Payload)) {
+            return '';
+        }
+
+        // Payload ist der MQTT-Nachrichteninhalt (JSON-String von BMW)
+        $payloadRaw = (string) $data->Payload;
+        $msg = json_decode($payloadRaw, true);
+        if (!is_array($msg)) {
+            // Fallback: IPS kodiert Payload teilweise als UTF-8
+            $msg = json_decode(utf8_decode($payloadRaw), true);
+        }
+        if (!is_array($msg)) {
+            $this->SendDebug('ReceiveData', 'Payload nicht als JSON lesbar: ' . substr($payloadRaw, 0, 120), 0);
+            return '';
+        }
+
+        $descriptors = $msg['data'] ?? [];
+        if (!is_array($descriptors) || $descriptors === []) {
+            return '';
+        }
+
+        $count = 0;
+        foreach ($this->GetDataMap() as $ident => $def) {
+            [$type, $key] = $def;
+            if (!isset($descriptors[$key])) {
+                continue;
+            }
+            $entry = $descriptors[$key];
+            $value = is_array($entry) ? ($entry['value'] ?? null) : $entry;
+            if ($value === null) {
+                continue;
+            }
+            $this->ApplyValue($ident, $type, $value);
+            $count++;
+        }
+
+        if ($count > 0) {
+            $this->SetValue('LastUpdate', time());
+            $this->SendDebug('ReceiveData', $count . ' Werte aktualisiert', 0);
+        }
+        return '';
+    }
+
+    private function ApplyValue(string $ident, int $type, $value): void
+    {
+        // BMW-Boolean-Notation normalisieren
+        if (is_string($value)) {
+            $low = strtolower($value);
+            if ($low === 'asn_istrue') { $value = true; }
+            elseif ($low === 'asn_isfalse') { $value = false; }
+            elseif ($low === 'asn_isunknown') { return; }
+        }
+
+        switch ($type) {
+            case 0:
+                $this->SetValue($ident, filter_var($value, FILTER_VALIDATE_BOOLEAN));
+                break;
+            case 1:
+                $this->SetValue($ident, (int) round((float) $value));
+                break;
+            case 2:
+                $this->SetValue($ident, (float) $value);
+                break;
+            default:
+                $this->SetValue($ident, (string) $value);
+                break;
+        }
     }
 
     // =====================================================================
@@ -151,7 +233,6 @@ class BMWCarData extends IPSModule
             return '';
         }
 
-        // PKCE: code_verifier + code_challenge (S256) erzeugen
         $verifier  = $this->Base64UrlEncode(random_bytes(48));
         $challenge = $this->Base64UrlEncode(hash('sha256', $verifier, true));
         $this->WriteAttributeString('CodeVerifier', $verifier);
@@ -164,7 +245,7 @@ class BMWCarData extends IPSModule
             'scope'                 => self::SCOPE,
         ];
 
-        $res = $this->HttpForm('POST', self::OAUTH_DEVICE_CODE, [], $params);
+        $res = $this->HttpForm(self::OAUTH_DEVICE_CODE, $params);
         if ($res['code'] !== 200 || !is_array($res['json'])) {
             $this->LogMessage('Device-Code Anforderung fehlgeschlagen: HTTP ' . $res['code'] . ' ' . $res['body'], KL_ERROR);
             echo $this->Translate('Fehler bei der Anmeldung') . ' (HTTP ' . $res['code'] . "):\n" . $res['body'];
@@ -177,14 +258,12 @@ class BMWCarData extends IPSModule
         $userCode = (string) ($res['json']['user_code'] ?? '');
         $expires  = (int) ($res['json']['expires_in'] ?? 300);
 
-        $this->SetStatus(203); // Login läuft
+        $this->SetStatus(203);
 
-        $msg = $this->Translate('Bitte diese Adresse im Browser öffnen und mit den BMW-ID Zugangsdaten anmelden:') . "\n\n"
-             . $uri . "\n\n"
-             . $this->Translate('User-Code') . ': ' . $userCode . "\n\n"
-             . sprintf($this->Translate('Der Code ist %d Sekunden gültig. Danach auf "2. Login abschließen" klicken.'), $expires);
-
-        echo $msg;
+        echo $this->Translate('Bitte diese Adresse im Browser öffnen und mit den BMW-ID Zugangsdaten anmelden:') . "\n\n"
+           . $uri . "\n\n"
+           . $this->Translate('User-Code') . ': ' . $userCode . "\n\n"
+           . sprintf($this->Translate('Der Code ist %d Sekunden gültig. Danach auf "2. Login abschließen" klicken.'), $expires);
         return $uri;
     }
 
@@ -210,8 +289,7 @@ class BMWCarData extends IPSModule
             'code_verifier' => $verifier,
         ];
 
-        $res = $this->HttpForm('POST', self::OAUTH_TOKEN, [], $params);
-
+        $res = $this->HttpForm(self::OAUTH_TOKEN, $params);
         if ($res['code'] !== 200 || !is_array($res['json'])) {
             $err = is_array($res['json']) ? (string) ($res['json']['error'] ?? '') : '';
             if ($err === 'authorization_pending') {
@@ -224,61 +302,48 @@ class BMWCarData extends IPSModule
         }
 
         $this->StoreTokens($res['json']);
-
-        // Aufräumen
         $this->WriteAttributeString('DeviceCode', '');
         $this->WriteAttributeString('CodeVerifier', '');
 
-        // Timer starten
-        $interval = $this->ReadPropertyInteger('UpdateInterval');
-        $this->SetTimerInterval('UpdateData', max(30, $interval) * 60 * 1000);
+        $interval = $this->ReadPropertyInteger('RefreshInterval');
+        $this->SetTimerInterval('RefreshToken', max(5, min(59, $interval)) * 60 * 1000);
+
+        // MQTT-Client vollständig konfigurieren und verbinden
+        $this->ConfigureParent(true);
 
         $this->UpdateStatus();
 
         $scope = $this->ReadAttributeString('Scope');
         $msg = $this->Translate('Anmeldung erfolgreich!') . "\n\n"
              . $this->Translate('Erteilte Berechtigungen (Scopes)') . ":\n" . $scope . "\n\n";
-
-        if (strpos($scope, 'cardata:api:read') === false) {
-            $msg .= $this->Translate('ACHTUNG: Der Scope "cardata:api:read" fehlt! Das Token ist NICHT für die API autorisiert. '
-                . 'Bitte im BMW CarData Portal dem Client die Berechtigung "CarData API" zuweisen, 2-3 Minuten warten '
-                . 'und den Login (Schritt 1 + 2) danach erneut ausführen.');
+        if (strpos($scope, 'cardata:streaming:read') === false) {
+            $msg .= $this->Translate('ACHTUNG: Der Scope "cardata:streaming:read" fehlt! Bitte im BMW-Portal den Client für "CarData Stream" abonnieren und den Login erneut ausführen.');
         } else {
-            $msg .= $this->Translate('Der Scope "cardata:api:read" ist vorhanden. Als Nächstes "Container einrichten" klicken.');
+            $msg .= $this->Translate('Der MQTT-Client wurde konfiguriert. Prüfe die Verbindung im übergeordneten "MQTT Client" und dass dort das Topic abonniert ist (siehe "Verbindungsdaten anzeigen").');
         }
-
         echo $msg;
         return true;
     }
 
     private function StoreTokens(array $token): void
     {
-        if (isset($token['access_token'])) {
-            $this->WriteAttributeString('AccessToken', (string) $token['access_token']);
-        }
-        if (isset($token['refresh_token'])) {
-            $this->WriteAttributeString('RefreshToken', (string) $token['refresh_token']);
-        }
-        if (isset($token['gcid'])) {
-            $this->WriteAttributeString('GCID', (string) $token['gcid']);
-        }
-        if (isset($token['scope'])) {
-            $this->WriteAttributeString('Scope', (string) $token['scope']);
-        }
+        if (isset($token['access_token']))  { $this->WriteAttributeString('AccessToken', (string) $token['access_token']); }
+        if (isset($token['refresh_token'])) { $this->WriteAttributeString('RefreshToken', (string) $token['refresh_token']); }
+        if (isset($token['id_token']))      { $this->WriteAttributeString('IDToken', (string) $token['id_token']); }
+        if (isset($token['gcid']))          { $this->WriteAttributeString('GCID', (string) $token['gcid']); }
+        if (isset($token['scope']))         { $this->WriteAttributeString('Scope', (string) $token['scope']); }
         $expiresIn = (int) ($token['expires_in'] ?? 3600);
-        // 60 Sekunden Sicherheitspuffer
         $this->WriteAttributeInteger('TokenExpiry', time() + $expiresIn - 60);
     }
 
     // =====================================================================
-    //  Token-Erneuerung
+    //  Token-Erneuerung (aktualisiert das id_token im MQTT-Client)
     // =====================================================================
 
     public function RefreshToken(): bool
     {
         $clientID = trim($this->ReadPropertyString('ClientID'));
         $refresh  = $this->ReadAttributeString('RefreshToken');
-
         if ($clientID === '' || $refresh === '') {
             return false;
         }
@@ -289,232 +354,111 @@ class BMWCarData extends IPSModule
             'client_id'     => $clientID,
         ];
 
-        $res = $this->HttpForm('POST', self::OAUTH_TOKEN, [], $params);
+        $res = $this->HttpForm(self::OAUTH_TOKEN, $params);
         if ($res['code'] !== 200 || !is_array($res['json'])) {
             $this->LogMessage('Token-Erneuerung fehlgeschlagen: HTTP ' . $res['code'] . ' ' . $res['body'], KL_ERROR);
-            // Refresh-Token evtl. abgelaufen (2 Wochen) -> Neuanmeldung nötig
             if ($res['code'] === 400 || $res['code'] === 401) {
                 $this->WriteAttributeString('RefreshToken', '');
-                $this->SetTimerInterval('UpdateData', 0);
+                $this->SetTimerInterval('RefreshToken', 0);
                 $this->UpdateStatus();
             }
             return false;
         }
 
         $this->StoreTokens($res['json']);
+        // Neues id_token als Passwort in den MQTT-Client schieben + neu verbinden
+        $this->ConfigureParent(false);
+        $this->SendDebug('RefreshToken', 'id_token erneuert und an MQTT-Client übergeben', 0);
         return true;
     }
 
-    /**
-     * Liefert ein gültiges Access-Token (erneuert bei Bedarf).
-     */
-    private function EnsureAccessToken(): string
-    {
-        if ($this->ReadAttributeString('RefreshToken') === '') {
-            return '';
-        }
-        if (time() >= $this->ReadAttributeInteger('TokenExpiry')) {
-            if (!$this->RefreshToken()) {
-                return '';
-            }
-        }
-        return $this->ReadAttributeString('AccessToken');
-    }
-
     // =====================================================================
-    //  Container einrichten (definiert die abzurufenden Telematik-Keys)
+    //  MQTT-Client (Parent) konfigurieren
     // =====================================================================
 
-    public function SetupContainer(): string
+    private function GetParentID(): int
     {
-        $token = $this->EnsureAccessToken();
-        if ($token === '') {
-            echo $this->Translate('Nicht angemeldet. Bitte zuerst den Login durchführen.');
-            return '';
-        }
-
-        $descriptors = [];
-        foreach ($this->GetDataMap() as $def) {
-            $descriptors[] = $def[1];
-        }
-
-        $body = [
-            'name'                 => 'IP-Symcon EV #' . $this->InstanceID,
-            'purpose'              => 'IP-Symcon Elektrofahrzeug Integration',
-            'technicalDescriptors' => array_values(array_unique($descriptors)),
-        ];
-
-        $headers = [
-            'Authorization: Bearer ' . $token,
-            'Content-Type: application/json',
-            'Accept: application/json',
-            'x-version: ' . self::API_VERSION,
-        ];
-
-        $res = $this->HttpRaw('POST', self::API_BASE . '/customers/containers/', $headers, json_encode($body));
-        if (($res['code'] === 200 || $res['code'] === 201) && is_array($res['json'])) {
-            $containerId = (string) ($res['json']['containerId'] ?? ($res['json']['id'] ?? ''));
-            if ($containerId !== '') {
-                $this->WriteAttributeString('AutoContainerID', $containerId);
-                echo $this->Translate('Container erfolgreich erstellt.') . "\n\n"
-                   . $this->Translate('Container-ID') . ': ' . $containerId . "\n\n"
-                   . $this->Translate('Diese ID wurde automatisch gespeichert. Ein manuelles Eintragen ist nicht nötig.');
-                return $containerId;
-            }
-        }
-
-        $this->LogMessage('Container-Erstellung fehlgeschlagen: HTTP ' . $res['code'] . ' ' . $res['body'], KL_ERROR);
-        echo $this->Translate('Container-Erstellung fehlgeschlagen') . ' (HTTP ' . $res['code'] . "):\n" . $res['body']
-           . $this->TokenErrorHint($res);
-        return '';
+        $instance = IPS_GetInstance($this->InstanceID);
+        return (int) $instance['ConnectionID'];
     }
 
     /**
-     * Liefert bei einem Token-/Autorisierungsfehler einen erklärenden Hinweistext.
+     * Schreibt die Zugangsdaten in den übergeordneten MQTT-Client.
+     * $applyConnection = true: komplette Verbindung (Host/Port/TLS/User/Passwort),
+     * sonst nur das Passwort (id_token) aktualisieren.
+     *
+     * Die Property-Namen des MQTT-Clients werden zur Laufzeit erkannt, um
+     * versionsunabhängig zu funktionieren.
      */
-    private function TokenErrorHint(array $res): string
+    private function ConfigureParent(bool $applyConnection): bool
     {
-        $body = strtolower($res['body'] ?? '');
-        $isTokenError = $res['code'] === 401
-            || strpos($body, 'invalid_access_token') !== false
-            || strpos($body, 'cu-103') !== false
-            || strpos($body, 'not authorized') !== false;
-
-        if (!$isTokenError) {
-            return '';
-        }
-
-        return "\n\n" . $this->Translate('HINWEIS: Das Token ist nicht für die CarData-API autorisiert. Mögliche Ursachen:') . "\n"
-            . $this->Translate('1. Dem Client fehlt im BMW-Portal der Scope "cardata:api:read" (Bereich "CarData API" abonnieren).') . "\n"
-            . $this->Translate('2. Die Berechtigung wurde erst NACH dem Login erteilt - dann Login (Schritt 1 + 2) erneut ausführen.') . "\n"
-            . $this->Translate('3. BMW braucht einige Minuten, bis neue Berechtigungen wirken - 2-3 Minuten warten und erneut versuchen.');
-    }
-
-    private function GetContainerID(): string
-    {
-        $manual = trim($this->ReadPropertyString('ContainerID'));
-        if ($manual !== '') {
-            return $manual;
-        }
-        return $this->ReadAttributeString('AutoContainerID');
-    }
-
-    // =====================================================================
-    //  Datenabruf
-    // =====================================================================
-
-    public function UpdateData(): bool
-    {
-        $token = $this->EnsureAccessToken();
-        if ($token === '') {
-            $this->UpdateStatus();
+        $parentId = $this->GetParentID();
+        if ($parentId === 0) {
+            $this->LogMessage('Kein MQTT-Client als übergeordnete Instanz gefunden.', KL_WARNING);
             return false;
         }
 
-        $vin = trim($this->ReadPropertyString('VIN'));
-        if ($vin === '') {
-            $this->SetStatus(204); // VIN fehlt
+        $config = json_decode(IPS_GetConfiguration($parentId), true);
+        if (!is_array($config)) {
             return false;
         }
 
-        $containerId = $this->GetContainerID();
-        if ($containerId === '') {
-            $this->SetStatus(205); // Container fehlt
-            return false;
-        }
-
-        $headers = [
-            'Authorization: Bearer ' . $token,
-            'Accept: application/json',
-            'x-version: ' . self::API_VERSION,
-        ];
-
-        $url = self::API_BASE . '/customers/vehicles/' . rawurlencode($vin) . '/telematicData?containerId=' . rawurlencode($containerId);
-
-        $res = $this->HttpRaw('GET', $url, $headers);
-
-        if ($res['code'] === 429) {
-            $this->LogMessage('BMW CarData Rate-Limit erreicht (50 Aufrufe / 24h). Bitte Intervall vergrößern.', KL_WARNING);
-            return false;
-        }
-
-        if ($res['code'] !== 200 || !is_array($res['json'])) {
-            $this->LogMessage('Datenabruf fehlgeschlagen: HTTP ' . $res['code'] . ' ' . $res['body'], KL_ERROR);
-            return false;
-        }
-
-        $count = 0;
-        foreach ($this->GetDataMap() as $ident => $def) {
-            [$type, $key] = $def;
-            $value = $this->ExtractTelematic($res['json'], $key);
-            if ($value === null) {
-                continue;
+        $setFirst = function (array $candidates, $value) use ($parentId, $config): bool {
+            foreach ($candidates as $key) {
+                if (array_key_exists($key, $config)) {
+                    IPS_SetProperty($parentId, $key, $value);
+                    return true;
+                }
             }
-            $this->ApplyValue($ident, $type, $value);
-            $count++;
+            return false;
+        };
+
+        // Passwort = aktuelles id_token (immer aktualisieren)
+        $setFirst(['Password', 'Passwort'], $this->ReadAttributeString('IDToken'));
+
+        if ($applyConnection) {
+            $setFirst(['Host', 'Server', 'URL', 'Address'], self::STREAM_HOST);
+            $setFirst(['Port'], self::STREAM_PORT);
+            $setFirst(['UseSSL', 'UseTLS', 'TLS', 'Encryption', 'UseEncryption'], true);
+            $setFirst(['UserName', 'Username', 'User'], $this->ReadAttributeString('GCID'));
         }
 
-        $this->SetValue('LastUpdate', time());
-        $this->SetStatus(102); // aktiv
-        $this->SendDebug('UpdateData', $count . ' Werte aktualisiert', 0);
+        if (IPS_HasChanges($parentId)) {
+            IPS_ApplyChanges($parentId);
+        }
         return true;
     }
 
-    private function ApplyValue(string $ident, int $type, $value): void
+    // =====================================================================
+    //  Verbindungsdaten anzeigen (für manuelle Einrichtung des MQTT-Clients)
+    // =====================================================================
+
+    public function ShowConnectionInfo(): void
     {
-        switch ($type) {
-            case 0:
-                $v = filter_var($value, FILTER_VALIDATE_BOOLEAN);
-                $this->SetValue($ident, (bool) $v);
-                break;
-            case 1:
-                $this->SetValue($ident, (int) round((float) $value));
-                break;
-            case 2:
-                $this->SetValue($ident, (float) $value);
-                break;
-            default:
-                $this->SetValue($ident, (string) $value);
-                break;
-        }
+        $gcid = $this->ReadAttributeString('GCID');
+        $vin  = trim($this->ReadPropertyString('VIN'));
+        $topic = ($gcid !== '' ? $gcid : 'GCID') . '/' . ($vin !== '' ? $vin : 'VIN');
+
+        echo $this->Translate('MQTT-Verbindungsdaten für den übergeordneten "MQTT Client":') . "\n\n"
+           . "Host:       " . self::STREAM_HOST . "\n"
+           . "Port:       " . self::STREAM_PORT . " (TLS/SSL)\n"
+           . "Username:   " . ($gcid !== '' ? $gcid : $this->Translate('(nach Login verfügbar)')) . "\n"
+           . "Passwort:   " . $this->Translate('id_token (wird vom Modul automatisch gesetzt/erneuert)') . "\n"
+           . "Topic-Abo:  " . $topic . "\n\n"
+           . $this->Translate('Trage das Topic-Abo im MQTT-Client unter "Subscriptions" ein. Host/Port/TLS/Username/Passwort werden beim Login automatisch gesetzt.');
     }
 
-    /**
-     * Sucht einen Telematik-Wert in der (evtl. verschachtelten) API-Antwort.
-     * Unterstützt sowohl { key: {value: ...} } als auch Listen mit {name:..., value:...}.
-     */
-    private function ExtractTelematic($data, string $key)
+    public function ConfigureMQTT(): bool
     {
-        if (!is_array($data)) {
-            return null;
+        if ($this->ReadAttributeString('IDToken') === '') {
+            echo $this->Translate('Noch kein Token vorhanden. Bitte zuerst den Login (Schritt 1 + 2) durchführen.');
+            return false;
         }
-
-        // Direkter Schlüssel
-        if (array_key_exists($key, $data)) {
-            return $this->NormalizeEntry($data[$key]);
-        }
-
-        // Rekursiv durchsuchen (inkl. Listen mit "name"-Feld)
-        foreach ($data as $v) {
-            if (is_array($v)) {
-                if (isset($v['name']) && $v['name'] === $key) {
-                    return $this->NormalizeEntry($v);
-                }
-                $found = $this->ExtractTelematic($v, $key);
-                if ($found !== null) {
-                    return $found;
-                }
-            }
-        }
-        return null;
-    }
-
-    private function NormalizeEntry($entry)
-    {
-        if (is_array($entry)) {
-            return $entry['value'] ?? null;
-        }
-        return $entry;
+        $ok = $this->ConfigureParent(true);
+        echo $ok
+            ? $this->Translate('MQTT-Client wurde mit Host, Port, TLS, Username und id_token konfiguriert.')
+            : $this->Translate('Konnte den MQTT-Client nicht konfigurieren. Ist eine "MQTT Client"-Instanz als übergeordnetes Gateway verbunden?');
+        return $ok;
     }
 
     // =====================================================================
@@ -523,23 +467,10 @@ class BMWCarData extends IPSModule
 
     private function UpdateStatus(): void
     {
-        if (trim($this->ReadPropertyString('ClientID')) === '') {
-            $this->SetStatus(201); // Client-ID fehlt
-            return;
-        }
-        if ($this->ReadAttributeString('RefreshToken') === '') {
-            $this->SetStatus(202); // nicht angemeldet
-            return;
-        }
-        if (trim($this->ReadPropertyString('VIN')) === '') {
-            $this->SetStatus(204); // VIN fehlt
-            return;
-        }
-        if ($this->GetContainerID() === '') {
-            $this->SetStatus(205); // Container fehlt
-            return;
-        }
-        $this->SetStatus(102); // aktiv
+        if (trim($this->ReadPropertyString('ClientID')) === '') { $this->SetStatus(201); return; }
+        if ($this->ReadAttributeString('RefreshToken') === '')  { $this->SetStatus(202); return; }
+        if (trim($this->ReadPropertyString('VIN')) === '')      { $this->SetStatus(204); return; }
+        $this->SetStatus(102);
     }
 
     private function Base64UrlEncode(string $data): string
@@ -547,45 +478,33 @@ class BMWCarData extends IPSModule
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 
-    // =====================================================================
-    //  HTTP-Helfer
-    // =====================================================================
-
-    private function HttpForm(string $method, string $url, array $headers, array $params): array
+    private function HttpForm(string $url, array $params): array
     {
-        $headers[] = 'Content-Type: application/x-www-form-urlencoded';
-        $headers[] = 'Accept: application/json';
-        return $this->HttpRaw($method, $url, $headers, http_build_query($params));
-    }
-
-    private function HttpRaw(string $method, string $url, array $headers, ?string $body = null): array
-    {
+        $headers = [
+            'Content-Type: application/x-www-form-urlencoded',
+            'Accept: application/json',
+        ];
         $ch = curl_init();
         curl_setopt_array($ch, [
             CURLOPT_URL            => $url,
-            CURLOPT_CUSTOMREQUEST  => $method,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => http_build_query($params),
             CURLOPT_HTTPHEADER     => $headers,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
         ]);
-        if ($body !== null) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        }
-
         $response = curl_exec($ch);
         $code     = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error    = curl_error($ch);
         curl_close($ch);
 
         if ($response === false) {
-            $this->SendDebug('HTTP', $method . ' ' . $url . ' -> cURL Fehler: ' . $error, 0);
+            $this->SendDebug('HTTP', $url . ' -> cURL Fehler: ' . $error, 0);
             return ['code' => 0, 'body' => $error, 'json' => null];
         }
-
-        $this->SendDebug('HTTP', $method . ' ' . $url . ' -> ' . $code, 0);
+        $this->SendDebug('HTTP', $url . ' -> ' . $code, 0);
         $json = json_decode((string) $response, true);
-
         return [
             'code' => $code,
             'body' => (string) $response,

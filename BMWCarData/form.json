@@ -1,13 +1,17 @@
 {
     "elements": [
         {
+            "type": "Label",
+            "caption": "BMW CarData Streaming (MQTT). Dieses Modul benötigt einen übergeordneten 'MQTT Client'. Über das Gateway/Verbindungs-Symbol oben wird dieser automatisch angelegt."
+        },
+        {
             "type": "ExpansionPanel",
             "caption": "1. Zugangsdaten",
             "expanded": true,
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Die Client-ID wird im BMW CarData Kundenportal erzeugt (Bereich 'API-Zugang' / 'CarData Client'). Benötigte Scopes: cardata:api:read und cardata:streaming:read."
+                    "caption": "Die Client-ID wird im BMW CarData Kundenportal erzeugt. Der Client muss für 'CarData Stream' (Scope cardata:streaming:read) abonniert sein - VOR dem Login."
                 },
                 {
                     "type": "ValidationTextBox",
@@ -30,7 +34,7 @@
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Schritt 1: 'Login starten' klicken. Es erscheint ein Link + Code. Diesen im Browser öffnen und mit den BMW-ID Zugangsdaten anmelden. Schritt 2: Danach 'Login abschließen' klicken."
+                    "caption": "Schritt 1: 'Login starten' klicken. Link + Code erscheinen. Im Browser mit BMW-ID anmelden. Schritt 2: Danach 'Login abschließen' klicken - der MQTT-Client wird dann automatisch konfiguriert."
                 },
                 {
                     "type": "RowLayout",
@@ -51,47 +55,51 @@
         },
         {
             "type": "ExpansionPanel",
-            "caption": "3. Datencontainer",
+            "caption": "3. MQTT-Verbindung",
             "expanded": true,
             "items": [
                 {
                     "type": "Label",
-                    "caption": "BMW CarData liefert Werte nur für Telematik-Schlüssel, die in einem 'Container' definiert sind. Einmalig 'Container einrichten' klicken - er enthält automatisch alle relevanten E-Fahrzeug-Werte."
+                    "caption": "Host, Port, TLS, Username und Passwort (id_token) werden beim Login automatisch in den MQTT-Client geschrieben. Das Topic-Abonnement muss einmalig im MQTT-Client eingetragen werden - die exakten Werte zeigt der Button unten."
                 },
                 {
-                    "type": "Button",
-                    "caption": "Container einrichten",
-                    "onClick": "BMWCD_SetupContainer($id);"
-                },
-                {
-                    "type": "ValidationTextBox",
-                    "name": "ContainerID",
-                    "caption": "Container-ID (optional, nur für manuelle Zuordnung)",
-                    "width": "400px"
+                    "type": "RowLayout",
+                    "items": [
+                        {
+                            "type": "Button",
+                            "caption": "Verbindungsdaten anzeigen",
+                            "onClick": "BMWCD_ShowConnectionInfo($id);"
+                        },
+                        {
+                            "type": "Button",
+                            "caption": "MQTT-Client neu konfigurieren",
+                            "onClick": "BMWCD_ConfigureMQTT($id);"
+                        }
+                    ]
                 }
             ]
         },
         {
             "type": "ExpansionPanel",
-            "caption": "4. Aktualisierung",
-            "expanded": true,
+            "caption": "4. Token-Erneuerung",
+            "expanded": false,
             "items": [
                 {
                     "type": "Label",
-                    "caption": "ACHTUNG: BMW CarData erlaubt nur max. 50 API-Abrufe pro 24 Stunden. Bei 60 Minuten Intervall werden ca. 24 Abrufe/Tag genutzt. Mindestintervall 30 Minuten empfohlen."
+                    "caption": "Das id_token (MQTT-Passwort) ist nur 1 Stunde gültig und wird automatisch erneuert. Intervall unter 60 Minuten lassen."
                 },
                 {
                     "type": "NumberSpinner",
-                    "name": "UpdateInterval",
-                    "caption": "Intervall (Minuten)",
-                    "minimum": 30,
-                    "maximum": 1440,
+                    "name": "RefreshInterval",
+                    "caption": "Erneuerung alle (Minuten)",
+                    "minimum": 5,
+                    "maximum": 59,
                     "suffix": "min"
                 },
                 {
                     "type": "Button",
-                    "caption": "Jetzt aktualisieren",
-                    "onClick": "BMWCD_UpdateData($id);"
+                    "caption": "Token jetzt erneuern",
+                    "onClick": "BMWCD_RefreshToken($id);"
                 }
             ]
         }
@@ -101,7 +109,7 @@
         {
             "code": 102,
             "icon": "active",
-            "caption": "Aktiv - Daten werden abgerufen"
+            "caption": "Aktiv - Streaming eingerichtet"
         },
         {
             "code": 201,
@@ -122,11 +130,6 @@
             "code": 204,
             "icon": "error",
             "caption": "VIN fehlt"
-        },
-        {
-            "code": 205,
-            "icon": "inactive",
-            "caption": "Container fehlt - bitte 'Container einrichten' klicken"
         }
     ]
 }
