@@ -15,7 +15,8 @@ declare(strict_types=1);
  *     stündlich neue id_token automatisch als Passwort in den MQTT Client.
  *   - Eingehende MQTT-Nachrichten werden in ReceiveData() geparst.
  *
- * MQTT-Interface-GUID des IP-Symcon MQTT Client: {7F7632D9-FA40-4F38-8AAA-83C630BAF737}
+ * MQTT-Datenfluss-GUIDs: RX (Parent->Modul) {7F7632D9-FA40-4F38-8DEA-C83CD4325A32},
+ *                        TX (Modul->Parent) {043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}
  */
 class BMWCarData extends IPSModule
 {
@@ -30,8 +31,8 @@ class BMWCarData extends IPSModule
     // Für das Streaming benötigter Scope
     private const SCOPE = 'authenticate_user openid cardata:streaming:read';
 
-    // Datenpaket-GUID zwischen MQTT Client und Kindmodulen
-    private const MQTT_TX = '{7F7632D9-FA40-4F38-8AAA-83C630BAF737}';
+    // IP-Symcon MQTT Client Modul-GUID (als übergeordnetes Gateway)
+    private const MQTT_CLIENT_GUID = '{F7A0DD2E-7684-95C0-64C2-D2A9DC47577B}';
 
     /**
      * Telematik-Schlüssel für ein Elektrofahrzeug.
@@ -56,9 +57,6 @@ class BMWCarData extends IPSModule
     public function Create()
     {
         parent::Create();
-
-        // Als Kind eines MQTT Client anmelden (I/O-Verbindung anfordern)
-        $this->ConnectParent('{F7A0DD2E-7684-95C0-64C2-D2A9DC47577B}'); // MQTT Client Modul-GUID
 
         $this->RegisterPropertyString('ClientID', '');
         $this->RegisterPropertyString('VIN', '');
@@ -97,6 +95,17 @@ class BMWCarData extends IPSModule
         $this->SetTimerInterval('RefreshToken', $connected ? max(5, min(59, $interval)) * 60 * 1000 : 0);
 
         $this->UpdateStatus();
+    }
+
+    /**
+     * Bietet den IP-Symcon MQTT Client als übergeordnetes Gateway an.
+     */
+    public function GetCompatibleParents(): string
+    {
+        return json_encode([
+            'type'      => 'connect',
+            'moduleIDs' => [self::MQTT_CLIENT_GUID],
+        ]);
     }
 
     // =====================================================================
@@ -156,13 +165,13 @@ class BMWCarData extends IPSModule
             return '';
         }
 
-        // Payload ist der MQTT-Nachrichteninhalt (JSON-String von BMW)
-        $payloadRaw = (string) $data->Payload;
-        $msg = json_decode($payloadRaw, true);
-        if (!is_array($msg)) {
-            // Fallback: IPS kodiert Payload teilweise als UTF-8
-            $msg = json_decode(utf8_decode($payloadRaw), true);
+        // IP-Symcon überträgt die MQTT-Payload HEX-kodiert
+        $payloadRaw = hex2bin((string) $data->Payload);
+        if ($payloadRaw === false) {
+            // Fallback: manche Konstellationen liefern die Payload direkt
+            $payloadRaw = (string) $data->Payload;
         }
+        $msg = json_decode($payloadRaw, true);
         if (!is_array($msg)) {
             $this->SendDebug('ReceiveData', 'Payload nicht als JSON lesbar: ' . substr($payloadRaw, 0, 120), 0);
             return '';
