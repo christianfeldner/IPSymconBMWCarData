@@ -1,11 +1,12 @@
 {
     "id": "{A5F8B2C1-3D4E-4F6A-9B7C-1E2D3F4A5B6C}",
     "author": "Christian",
-    "url": "",
+    "name": "BMW CarData",
+    "url": "https://github.com/christianfeldner/IPSymconBMWCarData",
     "version": "1.0",
     "build": 1,
     "date": 0,
     "compatibility": {
-        "version": "7.0"
+        "version": "6.0"
     }
 }
