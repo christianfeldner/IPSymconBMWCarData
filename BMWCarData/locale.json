@@ -1,0 +1,58 @@
+{
+    "translations": {
+        "en": {
+            "Ladezustand": "State of charge",
+            "Ziel-Ladezustand": "Target state of charge",
+            "Elektrische Reichweite": "Electric range",
+            "Ladestatus": "Charging status",
+            "Hochvolt-Status": "High-voltage status",
+            "Restladezeit": "Remaining charging time",
+            "Ladeanschluss": "Charging port",
+            "Vorklimatisierung": "Preconditioning",
+            "Kilometerstand": "Mileage",
+            "Letzte Aktualisierung": "Last update",
+
+            "1. Zugangsdaten": "1. Credentials",
+            "Die Client-ID wird im BMW CarData Kundenportal erzeugt (Bereich 'API-Zugang' / 'CarData Client'). Benötigte Scopes: cardata:api:read und cardata:streaming:read.": "The client ID is generated in the BMW CarData customer portal (section 'API access' / 'CarData Client'). Required scopes: cardata:api:read and cardata:streaming:read.",
+            "Client-ID": "Client ID",
+            "Fahrgestellnummer (VIN)": "Vehicle identification number (VIN)",
+
+            "2. Anmeldung (Device Code Flow)": "2. Login (device code flow)",
+            "Schritt 1: 'Login starten' klicken. Es erscheint ein Link + Code. Diesen im Browser öffnen und mit den BMW-ID Zugangsdaten anmelden. Schritt 2: Danach 'Login abschließen' klicken.": "Step 1: Click 'Start login'. A link + code appears. Open it in a browser and sign in with your BMW ID credentials. Step 2: Then click 'Complete login'.",
+            "1. Login starten": "1. Start login",
+            "2. Login abschließen": "2. Complete login",
+
+            "3. Datencontainer": "3. Data container",
+            "BMW CarData liefert Werte nur für Telematik-Schlüssel, die in einem 'Container' definiert sind. Einmalig 'Container einrichten' klicken - er enthält automatisch alle relevanten E-Fahrzeug-Werte.": "BMW CarData only returns values for telematic keys defined in a 'container'. Click 'Set up container' once - it automatically contains all relevant EV values.",
+            "Container einrichten": "Set up container",
+            "Container-ID (optional, nur für manuelle Zuordnung)": "Container ID (optional, for manual assignment only)",
+
+            "4. Aktualisierung": "4. Update",
+            "ACHTUNG: BMW CarData erlaubt nur max. 50 API-Abrufe pro 24 Stunden. Bei 60 Minuten Intervall werden ca. 24 Abrufe/Tag genutzt. Mindestintervall 30 Minuten empfohlen.": "NOTE: BMW CarData only allows max. 50 API calls per 24 hours. A 60-minute interval uses approx. 24 calls/day. Minimum interval of 30 minutes recommended.",
+            "Intervall (Minuten)": "Interval (minutes)",
+            "Jetzt aktualisieren": "Update now",
+
+            "Aktiv - Daten werden abgerufen": "Active - data is being retrieved",
+            "Client-ID fehlt": "Client ID missing",
+            "Nicht angemeldet - bitte Login durchführen": "Not logged in - please log in",
+            "Login läuft - bitte im Browser anmelden und Login abschließen": "Login in progress - please sign in via browser and complete login",
+            "VIN fehlt": "VIN missing",
+            "Container fehlt - bitte 'Container einrichten' klicken": "Container missing - please click 'Set up container'",
+
+            "Bitte zuerst die Client-ID eintragen und auf \"Übernehmen\" klicken.": "Please enter the client ID first and click 'Apply'.",
+            "Fehler bei der Anmeldung": "Login error",
+            "Bitte diese Adresse im Browser öffnen und mit den BMW-ID Zugangsdaten anmelden:": "Please open this address in a browser and sign in with your BMW ID credentials:",
+            "User-Code": "User code",
+            "Der Code ist %d Sekunden gültig. Danach auf \"2. Login abschließen\" klicken.": "The code is valid for %d seconds. Then click 'Complete login'.",
+            "Bitte zuerst \"1. Login starten\" ausführen.": "Please run 'Start login' first.",
+            "Die Anmeldung im Browser ist noch nicht abgeschlossen. Bitte erst im Browser anmelden und dann erneut auf \"2. Login abschließen\" klicken.": "The browser login is not yet complete. Please sign in via the browser first, then click 'Complete login' again.",
+            "Login fehlgeschlagen": "Login failed",
+            "Anmeldung erfolgreich! Die Daten werden nun regelmäßig abgerufen.": "Login successful! Data will now be retrieved regularly.",
+            "Nicht angemeldet. Bitte zuerst den Login durchführen.": "Not logged in. Please complete the login first.",
+            "Container erfolgreich erstellt.": "Container created successfully.",
+            "Container-ID": "Container ID",
+            "Diese ID wurde automatisch gespeichert. Ein manuelles Eintragen ist nicht nötig.": "This ID has been saved automatically. Manual entry is not necessary.",
+            "Container-Erstellung fehlgeschlagen": "Container creation failed"
+        }
+    }
+}

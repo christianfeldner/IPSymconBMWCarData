@@ -1,0 +1,132 @@
+{
+    "elements": [
+        {
+            "type": "ExpansionPanel",
+            "caption": "1. Zugangsdaten",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Die Client-ID wird im BMW CarData Kundenportal erzeugt (Bereich 'API-Zugang' / 'CarData Client'). Benötigte Scopes: cardata:api:read und cardata:streaming:read."
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "ClientID",
+                    "caption": "Client-ID",
+                    "width": "600px"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "VIN",
+                    "caption": "Fahrgestellnummer (VIN)",
+                    "width": "300px"
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "2. Anmeldung (Device Code Flow)",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Schritt 1: 'Login starten' klicken. Es erscheint ein Link + Code. Diesen im Browser öffnen und mit den BMW-ID Zugangsdaten anmelden. Schritt 2: Danach 'Login abschließen' klicken."
+                },
+                {
+                    "type": "RowLayout",
+                    "items": [
+                        {
+                            "type": "Button",
+                            "caption": "1. Login starten",
+                            "onClick": "BMWCD_RequestDeviceCode($id);"
+                        },
+                        {
+                            "type": "Button",
+                            "caption": "2. Login abschließen",
+                            "onClick": "BMWCD_CompleteLogin($id);"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "3. Datencontainer",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "BMW CarData liefert Werte nur für Telematik-Schlüssel, die in einem 'Container' definiert sind. Einmalig 'Container einrichten' klicken - er enthält automatisch alle relevanten E-Fahrzeug-Werte."
+                },
+                {
+                    "type": "Button",
+                    "caption": "Container einrichten",
+                    "onClick": "BMWCD_SetupContainer($id);"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "ContainerID",
+                    "caption": "Container-ID (optional, nur für manuelle Zuordnung)",
+                    "width": "400px"
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "4. Aktualisierung",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "ACHTUNG: BMW CarData erlaubt nur max. 50 API-Abrufe pro 24 Stunden. Bei 60 Minuten Intervall werden ca. 24 Abrufe/Tag genutzt. Mindestintervall 30 Minuten empfohlen."
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "UpdateInterval",
+                    "caption": "Intervall (Minuten)",
+                    "minimum": 30,
+                    "maximum": 1440,
+                    "suffix": "min"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Jetzt aktualisieren",
+                    "onClick": "BMWCD_UpdateData($id);"
+                }
+            ]
+        }
+    ],
+    "actions": [],
+    "status": [
+        {
+            "code": 102,
+            "icon": "active",
+            "caption": "Aktiv - Daten werden abgerufen"
+        },
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Client-ID fehlt"
+        },
+        {
+            "code": 202,
+            "icon": "inactive",
+            "caption": "Nicht angemeldet - bitte Login durchführen"
+        },
+        {
+            "code": 203,
+            "icon": "inactive",
+            "caption": "Login läuft - bitte im Browser anmelden und Login abschließen"
+        },
+        {
+            "code": 204,
+            "icon": "error",
+            "caption": "VIN fehlt"
+        },
+        {
+            "code": 205,
+            "icon": "inactive",
+            "caption": "Container fehlt - bitte 'Container einrichten' klicken"
+        }
+    ]
+}
