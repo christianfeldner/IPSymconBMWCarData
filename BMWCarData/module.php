@@ -64,6 +64,7 @@ class BMWCarData extends IPSModule
         $this->RegisterAttributeString('CodeVerifier', '');
         $this->RegisterAttributeString('AutoContainerID', '');
         $this->RegisterAttributeString('GCID', '');
+        $this->RegisterAttributeString('Scope', '');
 
         $this->RegisterTimer('UpdateData', 0, 'BMWCD_UpdateData($_IPS[\'TARGET\']);');
     }
@@ -233,10 +234,20 @@ class BMWCarData extends IPSModule
         $this->SetTimerInterval('UpdateData', max(30, $interval) * 60 * 1000);
 
         $this->UpdateStatus();
-        echo $this->Translate('Anmeldung erfolgreich! Die Daten werden nun regelmäßig abgerufen.');
 
-        // Direkt einmal Daten holen
-        $this->UpdateData();
+        $scope = $this->ReadAttributeString('Scope');
+        $msg = $this->Translate('Anmeldung erfolgreich!') . "\n\n"
+             . $this->Translate('Erteilte Berechtigungen (Scopes)') . ":\n" . $scope . "\n\n";
+
+        if (strpos($scope, 'cardata:api:read') === false) {
+            $msg .= $this->Translate('ACHTUNG: Der Scope "cardata:api:read" fehlt! Das Token ist NICHT für die API autorisiert. '
+                . 'Bitte im BMW CarData Portal dem Client die Berechtigung "CarData API" zuweisen, 2-3 Minuten warten '
+                . 'und den Login (Schritt 1 + 2) danach erneut ausführen.');
+        } else {
+            $msg .= $this->Translate('Der Scope "cardata:api:read" ist vorhanden. Als Nächstes "Container einrichten" klicken.');
+        }
+
+        echo $msg;
         return true;
     }
 
@@ -250,6 +261,9 @@ class BMWCarData extends IPSModule
         }
         if (isset($token['gcid'])) {
             $this->WriteAttributeString('GCID', (string) $token['gcid']);
+        }
+        if (isset($token['scope'])) {
+            $this->WriteAttributeString('Scope', (string) $token['scope']);
         }
         $expiresIn = (int) ($token['expires_in'] ?? 3600);
         // 60 Sekunden Sicherheitspuffer
@@ -350,8 +364,30 @@ class BMWCarData extends IPSModule
         }
 
         $this->LogMessage('Container-Erstellung fehlgeschlagen: HTTP ' . $res['code'] . ' ' . $res['body'], KL_ERROR);
-        echo $this->Translate('Container-Erstellung fehlgeschlagen') . ' (HTTP ' . $res['code'] . "):\n" . $res['body'];
+        echo $this->Translate('Container-Erstellung fehlgeschlagen') . ' (HTTP ' . $res['code'] . "):\n" . $res['body']
+           . $this->TokenErrorHint($res);
         return '';
+    }
+
+    /**
+     * Liefert bei einem Token-/Autorisierungsfehler einen erklärenden Hinweistext.
+     */
+    private function TokenErrorHint(array $res): string
+    {
+        $body = strtolower($res['body'] ?? '');
+        $isTokenError = $res['code'] === 401
+            || strpos($body, 'invalid_access_token') !== false
+            || strpos($body, 'cu-103') !== false
+            || strpos($body, 'not authorized') !== false;
+
+        if (!$isTokenError) {
+            return '';
+        }
+
+        return "\n\n" . $this->Translate('HINWEIS: Das Token ist nicht für die CarData-API autorisiert. Mögliche Ursachen:') . "\n"
+            . $this->Translate('1. Dem Client fehlt im BMW-Portal der Scope "cardata:api:read" (Bereich "CarData API" abonnieren).') . "\n"
+            . $this->Translate('2. Die Berechtigung wurde erst NACH dem Login erteilt - dann Login (Schritt 1 + 2) erneut ausführen.') . "\n"
+            . $this->Translate('3. BMW braucht einige Minuten, bis neue Berechtigungen wirken - 2-3 Minuten warten und erneut versuchen.');
     }
 
     private function GetContainerID(): string
